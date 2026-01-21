@@ -121,7 +121,7 @@ def upsert_events_to_bq(events: List[Dict[str, Any]]):
         query_parameters=[
             bigquery.ArrayQueryParameter(
                 "events",
-                bigquery.StructQueryParameterType(
+                bigquery.StructQueryParameterType([
                     bigquery.ScalarQueryParameterType("STRING", name="id"),
                     bigquery.ScalarQueryParameterType("STRING", name="name"),
                     bigquery.ScalarQueryParameterType("STRING", name="project_id"),
@@ -137,7 +137,7 @@ def upsert_events_to_bq(events: List[Dict[str, Any]]):
                     bigquery.ScalarQueryParameterType("STRING", name="data_bounce_type"),
                     bigquery.ScalarQueryParameterType("STRING", name="contact_email"),
                     bigquery.ScalarQueryParameterType("STRING", name="raw_json"),
-                ),
+                ]),
                 params
             )
         ]
