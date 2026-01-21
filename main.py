@@ -69,28 +69,24 @@ def upsert_events_to_bq(events: List[Dict[str, Any]]):
         data_obj = e.get("data", {})
         contact_obj = e.get("contact", {})
         
-        row = {
-            "id": e.get("id"),
-            "name": e.get("name"),
-            "project_id": e.get("projectId"),
-            "contact_id": e.get("contactId"),
-            "email_id": e.get("emailId"),
-            "created_at": e.get("createdAt"),
-            "timestamp": e.get("createdAt"), # Duplicate for partitioning if needed
-            
-            # Flatter data fields
-            "data_from": data_obj.get("from"),
-            "data_subject": data_obj.get("subject"),
-            "data_template_id": data_obj.get("templateId"),
-            "data_message_id": data_obj.get("messageId"),
-            "data_bounced_at": data_obj.get("bouncedAt"),
-            "data_bounce_type": data_obj.get("bounceType"),
-            
-            "contact_email": contact_obj.get("email"),
-            
-            # Store full raw just in case
-            "raw_json": json.dumps(e)
-        }
+        row = bigquery.StructQueryParameter(
+            None,
+            bigquery.ScalarQueryParameter("id", "STRING", e.get("id")),
+            bigquery.ScalarQueryParameter("name", "STRING", e.get("name")),
+            bigquery.ScalarQueryParameter("project_id", "STRING", e.get("projectId")),
+            bigquery.ScalarQueryParameter("contact_id", "STRING", e.get("contactId")),
+            bigquery.ScalarQueryParameter("email_id", "STRING", e.get("emailId")),
+            bigquery.ScalarQueryParameter("created_at", "TIMESTAMP", e.get("createdAt")),
+            bigquery.ScalarQueryParameter("timestamp", "TIMESTAMP", e.get("createdAt")),
+            bigquery.ScalarQueryParameter("data_from", "STRING", data_obj.get("from")),
+            bigquery.ScalarQueryParameter("data_subject", "STRING", data_obj.get("subject")),
+            bigquery.ScalarQueryParameter("data_template_id", "STRING", data_obj.get("templateId")),
+            bigquery.ScalarQueryParameter("data_message_id", "STRING", data_obj.get("messageId")),
+            bigquery.ScalarQueryParameter("data_bounced_at", "TIMESTAMP", data_obj.get("bouncedAt")),
+            bigquery.ScalarQueryParameter("data_bounce_type", "STRING", data_obj.get("bounceType")),
+            bigquery.ScalarQueryParameter("contact_email", "STRING", contact_obj.get("email")),
+            bigquery.ScalarQueryParameter("raw_json", "STRING", json.dumps(e)),
+        )
         params.append(row)
 
     # We use a MERGE query.
