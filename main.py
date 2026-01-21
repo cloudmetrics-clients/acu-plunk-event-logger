@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 # Configuration
 PLUNK_EVENTS_URL = "https://next-api.useplunk.com/events"
 BQ_TABLE_EVENTS = "acu-service.plunk.events"  # Dataset must exist
-ALERT_EMAIL_RECIPIENT = "florian.buettner@cloudmetrics.de"
+ALERT_EMAIL_RECIPIENTS = os.environ.get("ALERT_EMAIL_RECIPIENTS", "florian.buettner@cloudmetrics.de").split(",")
 ALERT_FROM_EMAIL = os.environ.get("PLUNK_FROM_EMAIL", "termin@a-c-u.eu")
 PLUNK_SEND_URL = "https://next-api.useplunk.com/v1/send"
 
@@ -206,10 +206,21 @@ def calculate_bounce_metrics() -> Dict[str, Any]:
     """
     bounces = [dict(row) for row in client.query(query_bounces).result()]
 
+    # Recent 16 minutes check (User request: Always alert if any bounce in last 16 mins)
+    query_16m = f"""
+        SELECT COUNT(DISTINCT email_id) as cnt
+        FROM `{BQ_TABLE_EVENTS}`
+        WHERE name = 'email.bounce'
+          AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 16 MINUTE)
+    """
+    row_16m = list(client.query(query_16m).result())[0]
+    bounced_16m = row_16m["cnt"] or 0
+
     return {
         "7d": {"sent": sent_7d, "bounced": bounced_7d, "rate": rate_7d},
         "all": {"sent": sent_all, "bounced": bounced_all, "rate": rate_all},
-        "recent_bounces": bounces
+        "recent_bounces": bounces,
+        "recent_bounces_16m_count": bounced_16m
     }
 
 def send_alert_email(metrics: Dict[str, Any], alerts: List[str]):
@@ -222,6 +233,7 @@ def send_alert_email(metrics: Dict[str, Any], alerts: List[str]):
     lines.append("--- Metrics ---")
     lines.append(f"7 Days: {metrics['7d']['rate']:.2%} ({metrics['7d']['bounced']}/{metrics['7d']['sent']})")
     lines.append(f"All Time: {metrics['all']['rate']:.2%} ({metrics['all']['bounced']}/{metrics['all']['sent']})")
+    lines.append(f"Recent 16min Bounces: {metrics['recent_bounces_16m_count']}")
     lines.append("")
     lines.append("--- Recent Bounces ---")
     for b in metrics["recent_bounces"]:
@@ -230,33 +242,29 @@ def send_alert_email(metrics: Dict[str, Any], alerts: List[str]):
         
     body_text = "\n".join(lines)
     
-    # We use requests directly safely.
-    # Note: Plunk doesn't have a generic "send raw text" endpoint easily if using templates only,
-    # but normally transactionals allow body.
-    # If Plunk ONLY supports templates, we might need a dedicated alert template.
-    # However, docs say 'body' parameter works for standard transactional?
-    # User code uses templates. 
-    # Let's assume we can use a generic system template OR just put it in a simple HTML body if Plunk supports it.
-    # If Plunk requires a template, we are in a bind without creating one.
-    # Fallback: Log heavily. But user requested usage of Plunk function to send mail.
-    # We will try to send with a simple body if API allows, or use a "generic" template if known.
-    # Since I don't have a template ID for alerts, I will try to use a simple text body. 
-    # Plunk API documentation (external knowledge): POST /v1/send supports 'body' (html/text).
-    
-    payload = {
-        "to": ALERT_EMAIL_RECIPIENT,
-        "subject": "Plunk Alert: Bounce Rates Exceeded",
-        "body": body_text.replace("\n", "<br>"),
-        "from": ALERT_FROM_EMAIL
-    }
-    
-    requests.post(
-        PLUNK_SEND_URL,
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=10
-    )
-    print("Alert email sent.")
+    # Loop over recipients
+    for recipient in ALERT_EMAIL_RECIPIENTS:
+        recipient = recipient.strip()
+        if not recipient:
+            continue
+            
+        payload = {
+            "to": recipient,
+            "subject": "Plunk Alert: Bounce Rates Exceeded",
+            "body": body_text.replace("\n", "<br>"),
+            "from": ALERT_FROM_EMAIL
+        }
+        
+        try:
+            requests.post(
+                PLUNK_SEND_URL,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=10
+            )
+            print(f"Alert email sent to {recipient}.")
+        except Exception as e:
+            print(f"Failed to send alert to {recipient}: {e}")
 
 @functions_framework.http
 def plunk_event_logger(request):
@@ -289,6 +297,10 @@ def plunk_event_logger(request):
         elif rate_all > BOUNCE_RATE_ALL_TIME_WARNING:
             alerts.append(f"WARNING: All-Time Bounce Rate is {rate_all:.2%} (> {BOUNCE_RATE_ALL_TIME_WARNING:.1%})")
             
+        # Recent Bounces Check (16m)
+        if metrics.get("recent_bounces_16m_count", 0) > 0:
+            alerts.append(f"INFO: {metrics['recent_bounces_16m_count']} bounce(s) detected in last 16 minutes.")
+
         if alerts:
             print("Sending alert...")
             send_alert_email(metrics, alerts)
